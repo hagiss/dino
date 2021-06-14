@@ -286,6 +286,6 @@ class DINOHead(nn.Module):
 
     def forward(self, x):
         x = self.mlp(x)
-        x = nn.functional.normalize(x, dim=-1, p=2)
-        x = self.last_layer(x)
-        return x
+        y = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(y)
+        return x, y
