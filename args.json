@@ -1,6 +1,6 @@
 {
   "arch": "vit_small",
-  "patch_size": 8,
+  "patch_size": 16,
   "out_dim": 65536,
   "norm_last_layer": false,
   "warmup_teacher_temp": 0.04,
@@ -10,7 +10,7 @@
   "weight_decay": 0.04,
   "weight_decay_end": 0.4,
   "clip_grad": 3.0,
-  "batch_size": 16,
+  "batch_size_per_gpu": 16,
   "epochs": 800,
   "freeze_last_layer": 1,
   "lr": 0.0005,
@@ -23,6 +23,7 @@
   "num_workers": 10,
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
+  "use_bn_in_head": false,
   "dataset": "imagenet",
-  "name": "test",
-  "use_bn_in_head": false}
+  "name": "test"
+}

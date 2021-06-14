@@ -20,6 +20,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+from einops import rearrange
 
 from utils import trunc_normal_
 
@@ -229,8 +230,8 @@ class VisionTransformer(nn.Module):
         for i, blk in enumerate(self.blocks):
             x = blk(x)
             if len(self.blocks) - i <= n:
-                output.append(self.norm(x))
-        return output
+                output.append(self.norm(x)[:, 0])
+        return torch.cat(output, dim=0)
 
 
 def vit_tiny(patch_size=16, **kwargs):
@@ -286,6 +287,57 @@ class DINOHead(nn.Module):
 
     def forward(self, x):
         x = self.mlp(x)
-        y = nn.functional.normalize(x, dim=-1, p=2)
-        x = self.last_layer(y)
-        return x, y
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x
+
+
+class StudentDINOHead(nn.Module):
+    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+        super().__init__()
+        self.layers = nn.ModuleList([])
+
+        for i in range(12):
+            if i == 11:
+                nlayers=3
+            nlayers = max(nlayers, 1)
+            if nlayers == 1:
+                mlp = nn.Linear(in_dim, bottleneck_dim)
+            else:
+                layers = [nn.Linear(in_dim, hidden_dim)]
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+                for _ in range(nlayers - 2):
+                    layers.append(nn.Linear(hidden_dim, hidden_dim))
+                    if use_bn:
+                        layers.append(nn.BatchNorm1d(hidden_dim))
+                    layers.append(nn.GELU())
+                layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+                mlp = nn.Sequential(*layers)
+            self.layers.append(mlp)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    # x.shape is [depth*batch*view, embedding_dim]
+    # return shape is [depth * batch * view, out_dim]
+    def forward(self, x):
+        ret = []
+        x = rearrange(x, '(d bv) e -> d bv e', d=12)
+        for i, mlp in enumerate(self.layers):
+            ret.append(mlp(x[i, :]))
+        ret = torch.cat(ret)
+        # ret = rearrange(ret, 'b d e -> (b d) e')
+        ret = nn.functional.normalize(ret, dim=-1, p=2)
+        ret = self.last_layer(ret)
+        # ret = rearrange(ret, '(b d) e -> b d e', d=12)
+        return ret

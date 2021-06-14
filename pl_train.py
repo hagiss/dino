@@ -15,7 +15,7 @@ from torchvision import models as torchvision_models
 import utils
 from main_dino import DataAugmentationDINO, DINOLoss
 import vision_transformer as vits
-from vision_transformer import DINOHead
+from vision_transformer import DINOHead, StudentDINOHead
 import json
 
 
@@ -45,12 +45,15 @@ class PLLearner(pl.LightningModule):
 
         self.freeze_last_layer = args.freeze_last_layer
 
-        self.student = utils.MultiCropWrapper(student, DINOHead(
+        teacher.load_state_dict(student.state_dict())
+
+        self.student = utils.MultiCropWrapper(student, StudentDINOHead(
             embed_dim,
             args.out_dim,
             use_bn=False,
             norm_last_layer=args.norm_last_layer,
-        ))
+            nlayers=2,
+        ), True)
         self.teacher = utils.MultiCropWrapper(
             teacher,
             DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
@@ -58,7 +61,8 @@ class PLLearner(pl.LightningModule):
 
         # self.teacher_without_ddp = self.teacher
 
-        self.teacher.load_state_dict(self.student.state_dict())
+        self.teacher.head.mlp.load_state_dict(self.student.head.layers[-1].state_dict())
+        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -84,7 +88,7 @@ class PLLearner(pl.LightningModule):
 
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
-            args.lr * (args.batch_size * torch.cuda.device_count()) / 256.,  # linear scaling rule
+            args.lr * (args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
@@ -100,7 +104,6 @@ class PLLearner(pl.LightningModule):
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
-        self.criterion = torch.nn.CrossEntropyLoss()
 
         self.fp16_scaler = None
         if args.use_fp16:
@@ -116,7 +119,7 @@ class PLLearner(pl.LightningModule):
         images = batch[0]
 
         with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-            teacher_output, _, student_output, _ = self.forward(images)
+            teacher_output, student_output = self.forward(images)
             loss = self.loss(student_output, teacher_output, self.current_epoch)
             self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -139,7 +142,13 @@ class PLLearner(pl.LightningModule):
 
     def on_before_zero_grad(self, _):
         m = self.momentum_schedule[self.global_step]
-        for current_params, ma_params in zip(self.student.parameters(), self.teacher.parameters()):
+        for current_params, ma_params in zip(self.student.backbone.parameters(), self.teacher.backbone.parameters()):
+            old_weight, up_weight = ma_params.data, current_params.data
+            ma_params.data = old_weight * m + (1 - m) * up_weight
+        for current_params, ma_params in zip(self.student.head.layers[-1].parameters(), self.teacher.head.mlp.parameters()):
+            old_weight, up_weight = ma_params.data, current_params.data
+            ma_params.data = old_weight * m + (1 - m) * up_weight
+        for current_params, ma_params in zip(self.student.head.last_layer.parameters(), self.teacher.head.last_layer.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
 
@@ -244,7 +253,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epoch")
-    parser.add_argument('--batch_size', '-b', type=int, default=256, help="batch size")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboardx path')
 
@@ -335,12 +344,6 @@ if __name__ == '__main__':
         args.local_crops_scale,
         args.local_crops_number
     )
-    train_transform = T.Compose([
-        T.RandomResizedCrop(224),
-        T.RandomHorizontalFlip(),
-        T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
     val_transform = T.Compose([
         T.Resize(256, interpolation=3),
         T.CenterCrop(224),
@@ -350,7 +353,7 @@ if __name__ == '__main__':
 
     if args.dataset == "stl10":
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
-        dataset_train = datasets.STL10(args.data, split='train', download=True, transform=train_transform)
+        dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
         path = '/data/data/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
@@ -360,7 +363,7 @@ if __name__ == '__main__':
         )
         dataset_train = datasets.ImageFolder(
             path + '/train',
-            train_transform
+            val_transform
         )
         dataset_val = datasets.ImageFolder(
             path + '/val',
@@ -371,7 +374,7 @@ if __name__ == '__main__':
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
@@ -379,7 +382,7 @@ if __name__ == '__main__':
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_per_gpu,
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
@@ -387,7 +390,7 @@ if __name__ == '__main__':
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         dataset_val,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
     )
@@ -418,7 +421,7 @@ if __name__ == '__main__':
         default_root_dir="output/vit.model",
         accelerator='ddp',
         logger=logger,
-        num_sanity_val_steps=2,
+        num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         callbacks=[lr_monitor]
     )

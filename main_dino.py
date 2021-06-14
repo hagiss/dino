@@ -33,6 +33,7 @@ from torchvision import models as torchvision_models
 import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
+from einops import repeat
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -374,7 +375,8 @@ class DINOLoss(nn.Module):
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
         student_out = student_output / self.student_temp
-        student_out = student_out.chunk(self.ncrops)
+        # print(student_out.shape)
+        student_out = student_out.chunk(self.ncrops*12)
 
         # teacher centering and sharpening
         temp = self.teacher_temp_schedule[epoch]

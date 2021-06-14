@@ -570,12 +570,13 @@ class MultiCropWrapper(nn.Module):
     concatenate all the output features and run the head forward on these
     concatenated features.
     """
-    def __init__(self, backbone, head):
+    def __init__(self, backbone, head, student=False):
         super(MultiCropWrapper, self).__init__()
         # disable layers dedicated to ImageNet labels classification
         backbone.fc, backbone.head = nn.Identity(), nn.Identity()
         self.backbone = backbone
         self.head = head
+        self.student = student
 
     def forward(self, x):
         # convert to list
@@ -587,7 +588,10 @@ class MultiCropWrapper(nn.Module):
         )[1], 0)
         start_idx = 0
         for end_idx in idx_crops:
-            _out = self.backbone(torch.cat(x[start_idx: end_idx]))
+            if self.student:
+                _out = self.backbone.get_intermediate_layers(torch.cat(x[start_idx: end_idx]), n=12)
+            else:
+                _out = self.backbone(torch.cat(x[start_idx: end_idx]))
             if start_idx == 0:
                 output = _out
             else:
