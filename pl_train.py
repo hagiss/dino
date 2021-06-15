@@ -428,7 +428,7 @@ if __name__ == '__main__':
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
-        val_check_interval=2,
+        check_val_every_n_epoch=5,
         callbacks=[lr_monitor]
     )
 
