@@ -10,7 +10,7 @@
   "weight_decay": 0.04,
   "weight_decay_end": 0.4,
   "clip_grad": 0,
-  "batch_size_per_gpu": 32,
+  "batch_size_per_gpu": 64,
   "epochs": 800,
   "freeze_last_layer": 1,
   "lr": 0.0005,
@@ -26,5 +26,5 @@
   "use_bn_in_head": false,
   "dataset": "imagenet",
   "name": "test_16",
-  "accumulate": 16
+  "accumulate": 4
 }

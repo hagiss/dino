@@ -18,6 +18,7 @@ import vision_transformer as vits
 from vision_transformer import DINOHead, StudentDINOHead
 import json
 import math
+from tqdm import tqdm
 
 
 def default(val, def_val):
@@ -167,24 +168,27 @@ class PLLearner(pl.LightningModule):
     @torch.no_grad()
     def validation_epoch_end(self, outs):
         train_features = torch.cat([f[0] for f in outs])
+        print(train_features.shape)
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t).t()#.to(self.device)
-        train_features = F.normalize(train_features, dim=1)
+        train_features = torch.cat(gather_t)#.to(self.device)
+        train_features = F.normalize(train_features, dim=1).t()
 
         train_labels = torch.cat([f[1] for f in outs])
         gather_t = [torch.ones_like(train_labels) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_labels)
-        train_labels = torch.cat(gather_t)#.to(self.device)
+        train_labels = torch.cat(gather_t).to(self.device)
 
-        k = 10
-        num_classes = 10
-        retrieval_one_hot = torch.zeros(k, num_classes)#.to(self.device)
+        print("Gathered all features!")
+
+        k = 20
+        num_classes = 1000
+        retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
         top1, top5, total = 0.0, 0.0, 0
         # print("train_features", train_features)
         # print(len(self.val_loader))
 
-        for batch in self.val_loader:
+        for batch in tqdm(self.val_loader):
             features = self.student.backbone(batch[0].to(self.device))
             features = F.normalize(features, dim=1).cpu()
             # print("features", features)
@@ -195,7 +199,9 @@ class PLLearner(pl.LightningModule):
 
             similarity = torch.mm(features, train_features)
             # print("similarity", similarity)
-            distances, indices = similarity.topk(k, largest=True, sorted=True).to(self.device)
+            distances, indices = similarity.topk(k, largest=True, sorted=True)
+            distances = distances.to(self.device)
+            indices = indices.to(self.device)
             # print("distances", distances)
             # print("indices", indices)
             candidates = train_labels.view(1, -1).expand(batch_size, -1)
