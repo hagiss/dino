@@ -17,6 +17,7 @@ from main_dino import DataAugmentationDINO, DINOLoss
 import vision_transformer as vits
 from vision_transformer import DINOHead, StudentDINOHead
 import json
+import math
 
 
 def default(val, def_val):
@@ -86,9 +87,11 @@ class PLLearner(pl.LightningModule):
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
+        length = math.ceil(length / args.accumulate)
+
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
-            args.lr * (args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
+            args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
@@ -100,7 +103,7 @@ class PLLearner(pl.LightningModule):
         )
         # momentum parameter is increased to 1. during training with a cosine schedule
         self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
-                                                        args.epochs, length)
+                                                        args.epochs, length / args.accumulate)
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
@@ -125,20 +128,14 @@ class PLLearner(pl.LightningModule):
 
         return {'loss': loss}
 
-    def optimizer_step(
-            self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure,
-            on_tpu=False, using_native_amp=False, using_lbfgs=False,
-    ):
-        for i, param_group in enumerate(optimizer.param_groups):
+    def on_after_backward(self):
+        for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-        utils.cancel_gradients_last_layer(epoch, self.student,
+        utils.cancel_gradients_last_layer(self.current_epoch, self.student,
                                           self.freeze_last_layer)
-
-        # update params
-        optimizer.step(closure=optimizer_closure)
 
     def on_before_zero_grad(self, _):
         m = self.momentum_schedule[self.global_step]
@@ -156,7 +153,7 @@ class PLLearner(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, label = batch
 
-        features = self.student.backbone(x)
+        features = self.student.backbone(x).cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -172,24 +169,24 @@ class PLLearner(pl.LightningModule):
         train_features = torch.cat([f[0] for f in outs])
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t).t().to(self.device)
+        train_features = torch.cat(gather_t).t()#.to(self.device)
         train_features = F.normalize(train_features, dim=1)
 
         train_labels = torch.cat([f[1] for f in outs])
         gather_t = [torch.ones_like(train_labels) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_labels)
-        train_labels = torch.cat(gather_t).to(self.device)
+        train_labels = torch.cat(gather_t)#.to(self.device)
 
         k = 10
         num_classes = 10
-        retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
+        retrieval_one_hot = torch.zeros(k, num_classes)#.to(self.device)
         top1, top5, total = 0.0, 0.0, 0
         # print("train_features", train_features)
         # print(len(self.val_loader))
 
         for batch in self.val_loader:
             features = self.student.backbone(batch[0].to(self.device))
-            features = F.normalize(features, dim=1)
+            features = F.normalize(features, dim=1).cpu()
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -198,7 +195,7 @@ class PLLearner(pl.LightningModule):
 
             similarity = torch.mm(features, train_features)
             # print("similarity", similarity)
-            distances, indices = similarity.topk(k, largest=True, sorted=True)
+            distances, indices = similarity.topk(k, largest=True, sorted=True).to(self.device)
             # print("distances", distances)
             # print("indices", indices)
             candidates = train_labels.view(1, -1).expand(batch_size, -1)
@@ -256,6 +253,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboardx path')
+    parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../data',
                         help='path to dataset')
@@ -423,6 +421,7 @@ if __name__ == '__main__':
         logger=logger,
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
+        accumulate_grad_batches=args.accumulate,
         callbacks=[lr_monitor]
     )
 

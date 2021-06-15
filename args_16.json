@@ -25,5 +25,6 @@
   "momentum_teacher": 0.996,
   "use_bn_in_head": false,
   "dataset": "imagenet",
-  "name": "test_16"
+  "name": "test_16",
+  "accumulate": 16
 }
