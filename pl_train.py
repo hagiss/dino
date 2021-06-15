@@ -422,6 +422,7 @@ if __name__ == '__main__':
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
+        val_check_interval=2,
         callbacks=[lr_monitor]
     )
 
