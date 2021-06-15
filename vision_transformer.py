@@ -230,7 +230,10 @@ class VisionTransformer(nn.Module):
         for i, blk in enumerate(self.blocks):
             x = blk(x)
             if len(self.blocks) - i <= n:
-                output.append(self.norm(x)[:, 0])
+                if i == 11:
+                    output.append(self.norm(x)[:, 0])
+                else:
+                    output.append(self.norm(x).mean(dim=1))
         return torch.cat(output, dim=0)
 
 
