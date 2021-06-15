@@ -266,6 +266,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', '-ds', default='stl10',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
     parser.add_argument('--name', help='name for tensorboard')
+    parser.add_argument('--val_interval', default=1, type=int, help='validation epoch interval')
 
     # Multi-crop parameters
     parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
@@ -428,7 +429,7 @@ if __name__ == '__main__':
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=5,
+        check_val_every_n_epoch=args.val_interval,
         callbacks=[lr_monitor]
     )
 

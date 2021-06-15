@@ -26,5 +26,6 @@
   "use_bn_in_head": false,
   "dataset": "imagenet",
   "name": "test_16",
-  "accumulate": 4
+  "accumulate": 4,
+  "val_interval": 10
 }
