@@ -339,15 +339,13 @@ class StudentDINOHead(nn.Module):
     def forward(self, x):
         ret = []
         x = rearrange(x, '(d bv) e -> d bv e', d=12)
-        for i, mlp in enumerate(self.layers):
-            ret.append(mlp(x[i, :]))
+        for i, (mlp, last_layer) in enumerate(zip(self.layers, self.last_layers)):
+            ret.append(last_layer(nn.functional.normalize(mlp(x[i, :]))))
         ret = torch.cat(ret)
         # ret = rearrange(ret, 'b d e -> (b d) e')
-        ret = nn.functional.normalize(ret, dim=-1, p=2)
-        ret = rearrange(ret, '(d bv) e -> d bv e', d=12)
-        last = []
-        for i, last_layer in enumerate(self.last_layers):
-            last.append(last_layer(ret[i, :]))
-        last = torch.cat(last)
+        # last = []
+        # for i, last_layer in enumerate(self.last_layers):
+        #     last.append(last_layer(ret[i, :]))
+        # last = torch.cat(last)
         # ret = rearrange(ret, '(b d) e -> b d e', d=12)
-        return last
+        return ret
