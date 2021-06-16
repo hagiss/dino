@@ -64,7 +64,7 @@ class PLLearner(pl.LightningModule):
         # self.teacher_without_ddp = self.teacher
 
         self.teacher.head.mlp.load_state_dict(self.student.head.layers[-1].state_dict())
-        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
+        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer[-1].state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -146,7 +146,7 @@ class PLLearner(pl.LightningModule):
         for current_params, ma_params in zip(self.student.head.layers[-1].parameters(), self.teacher.head.mlp.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.head.last_layer.parameters(), self.teacher.head.last_layer.parameters()):
+        for current_params, ma_params in zip(self.student.head.last_layer[-1].parameters(), self.teacher.head.last_layer.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
 
@@ -361,7 +361,7 @@ if __name__ == '__main__':
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = '/data/data/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
