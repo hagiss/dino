@@ -344,6 +344,7 @@ class StudentDINOHead(nn.Module):
         ret = torch.cat(ret)
         # ret = rearrange(ret, 'b d e -> (b d) e')
         ret = nn.functional.normalize(ret, dim=-1, p=2)
+        ret = rearrange(ret, '(d bv) e -> d bv e', d=12)
         last = []
         for i, last_layer in enumerate(self.last_layers):
             last.append(last_layer(ret[i, :]))
