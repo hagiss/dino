@@ -299,6 +299,7 @@ class StudentDINOHead(nn.Module):
     def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
         super().__init__()
         self.layers = nn.ModuleList([])
+        self.last_layers = nn.ModuleList([])
 
         for i in range(12):
             if i == 11:
@@ -320,10 +321,12 @@ class StudentDINOHead(nn.Module):
                 mlp = nn.Sequential(*layers)
             self.layers.append(mlp)
         self.apply(self._init_weights)
-        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-        self.last_layer.weight_g.data.fill_(1)
-        if norm_last_layer:
-            self.last_layer.weight_g.requires_grad = False
+        for i in range(12):
+            last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+            last_layer.weight_g.data.fill_(1)
+            if norm_last_layer:
+                last_layer.weight_g.requires_grad = False
+            self.last_layers.append(last_layer)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -341,6 +344,9 @@ class StudentDINOHead(nn.Module):
         ret = torch.cat(ret)
         # ret = rearrange(ret, 'b d e -> (b d) e')
         ret = nn.functional.normalize(ret, dim=-1, p=2)
-        ret = self.last_layer(ret)
+        last = []
+        for i, last_layer in enumerate(self.last_layers):
+            last.append(last_layer(ret[i, :]))
+        last = torch.cat(last)
         # ret = rearrange(ret, '(b d) e -> b d e', d=12)
-        return ret
+        return last
